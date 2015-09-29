@@ -9,6 +9,7 @@ import (
 type Task interface {
 	Name() string
 	Schedule() *schyntax.Schedule
+	Callback() func(task Task, timeIntendedToRun time.Time) error
 	IsScheduleRunning() bool
 	IsAttached() bool
 	Window() time.Duration
@@ -30,6 +31,7 @@ type taskImpl struct {
 	schtick           *schtickImpl
 	name              string
 	schedule          schyntax.Schedule
+	callback          func(task Task, timeIntendedToRun time.Time) error
 	isScheduleRunning bool
 	isAttached        bool
 	window            time.Duration
@@ -43,6 +45,10 @@ func (t *taskImpl) Name() string {
 
 func (t *taskImpl) Schedule() schyntax.Schedule {
 	return t.schedule
+}
+
+func (t *taskImpl) Callback() func(task Task, timeIntendedToRun time.Time) error {
+	return t.callback
 }
 
 func (t *taskImpl) IsScheduleRunning() bool {
@@ -70,6 +76,10 @@ func (t *taskImpl) PrevEvent() time.Time {
 }
 
 func (t *taskImpl) StartSchedule() {
+	// todo
+}
+
+func (t *taskImpl) StartFromLastKnownEvent(lastKnownEvent time.Time) {
 	// todo
 }
 
