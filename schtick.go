@@ -8,20 +8,23 @@ import (
 	"time"
 )
 
+type TaskCallback func(task Task, timeIntendedToRun time.Time) error
+
 type Options struct {
 	Name           string
 	ScheduleString string
 	Schedule       schyntax.Schedule
-	Callback       func(task Task, timeIntendedToRun time.Time) error
+	Callback       TaskCallback
 	Window         time.Duration
 	LastKnownEvent time.Time
 	DisableAutoRun bool
 }
 
 type Schtick interface {
-	AddTask(options Options) Task
+	AddTask(options Options) (Task, error)
+	AddTaskWithDefaults(name string, schedule string, callback TaskCallback) (Task, error)
 	GetTaskByName(name string) Task
-	RemoveTask(name string) bool
+	RemoveTask(name string) (bool, error)
 	IsShuttingDown() bool
 	Shutdown()
 }
@@ -40,10 +43,20 @@ type schtickImpl struct {
 func New(errorHandler func(task Task, err error)) Schtick {
 	s := &schtickImpl{}
 	s.errorHandler = errorHandler
+	s.tasks = make(map[string]*taskImpl)
 
 	go s.poll()
 
 	return s
+}
+
+func (s *schtickImpl) AddTaskWithDefaults(name string, schedule string, callback TaskCallback) (Task, error) {
+	options := Options{}
+	options.Name = name
+	options.ScheduleString = schedule
+	options.Callback = callback
+
+	return s.AddTask(options)
 }
 
 func (s *schtickImpl) AddTask(options Options) (Task, error) {
@@ -83,7 +96,7 @@ func (s *schtickImpl) AddTask(options Options) (Task, error) {
 	}
 
 	// create the task
-	task := taskImpl{}
+	task := &taskImpl{}
 	task.schtick = s
 	task.name = name
 	task.schedule = sch
@@ -97,7 +110,7 @@ func (s *schtickImpl) AddTask(options Options) (Task, error) {
 		task.StartFromLastKnownEvent(options.LastKnownEvent)
 	}
 
-	return task
+	return task, nil
 }
 
 func (s *schtickImpl) GetTaskByName(name string) Task {
@@ -119,8 +132,26 @@ func (s *schtickImpl) GetAllTasks() []Task {
 	return tasks
 }
 
-func (s *schtickImpl) RemoveTask(name string) bool {
-	// todo
+func (s *schtickImpl) RemoveTask(name string) (bool, error) {
+	s.tasksLock.Lock()
+	defer s.tasksLock.Unlock()
+
+	if s.IsShuttingDown() {
+		return false, errors.New("Cannot remove a task from Schtick after Shutdown() has been called.")
+	}
+
+	task := s.tasks[name]
+	if task == nil {
+		return false, nil
+	}
+
+	if task.IsScheduleRunning() {
+		return false, errors.New(`Cannot remove task "` + name + `". It is still running.`)
+	}
+
+	task.isAttached = false
+	delete(s.tasks, name)
+	return true, nil
 }
 
 func (s *schtickImpl) IsShuttingDown() bool {
@@ -128,7 +159,17 @@ func (s *schtickImpl) IsShuttingDown() bool {
 }
 
 func (s *schtickImpl) Shutdown() {
-	// todo
+	s.tasksLock.Lock()
+	defer s.tasksLock.Unlock()
+
+	s.isShuttingDown = true
+
+	for _, t := range s.tasks {
+		t.isAttached = false
+		t.StopSchedule()
+	}
+
+	// todo - done channel
 }
 
 func (s *schtickImpl) addPendingEvent(ev *pendingEvent) {
@@ -174,7 +215,7 @@ func (s *schtickImpl) poll() {
 	}
 }
 
-func (s *schtickImpl) popAndRunEvents(intendedTime *time.Time) {
+func (s *schtickImpl) popAndRunEvents(intendedTime time.Time) {
 	s.heapLock.Lock()
 	defer s.heapLock.Unlock()
 

@@ -13,7 +13,7 @@ func (e *pendingEvent) IsEarlierThan(a *pendingEvent) bool {
 }
 
 func (e *pendingEvent) Run() {
-	e.Task.runPendingEvent(e)
+	go e.Task.runPendingEvent(e)
 }
 
 type pendingEventHeap struct {
