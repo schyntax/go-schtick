@@ -16,6 +16,7 @@ type Locker interface {
 	Wrap(schtick.TaskCallback) schtick.TaskCallback
 
 	SetHostname(string)
+	SetPrefix(string)
 }
 
 type taskLocker struct {
@@ -28,18 +29,22 @@ type taskLocker struct {
 func (t *taskLocker) SetHostname(n string) {
 	t.host = n
 }
+func (t *taskLocker) SetPrefix(p string) {
+	t.prefix = p
+	t.lastKey = p + "_last"
+}
 
 func New(connect func() redis.Conn) Locker {
 	host, err := os.Hostname()
 	if err != nil {
 		host = "???"
 	}
-	return &taskLocker{
+	locker := &taskLocker{
 		connect: connect,
 		host:    host,
-		prefix:  "schyntax",
-		lastKey: "schyntax_last",
 	}
+	locker.SetPrefix("schyntax")
+	return locker
 }
 
 const LOCK_SCRIPT = `
@@ -61,10 +66,12 @@ func (t *taskLocker) Wrap(cb schtick.TaskCallback) schtick.TaskCallback {
 		lockKey := fmt.Sprintf("%s;%s;%s", t.prefix, task.Name(), iso)
 		lastLockValue := fmt.Sprintf("%s;%s;%s", iso, time.Now().UTC().Format(format), t.host)
 
-		px := int(time.Hour / time.Millisecond) // TODO: window?
+		window := task.Window() + time.Hour
+		px := int(window / time.Millisecond)
 
 		args := []interface{}{lockKey, t.host, px, t.lastKey, task.Name(), lastLockValue}
 		conn := t.connect()
+		defer conn.Close()
 		lockAquired, err := redis.Int(script.Do(conn, args...))
 		if err != nil {
 			return err
